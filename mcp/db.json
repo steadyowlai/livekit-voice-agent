@@ -1,0 +1,59 @@
+{
+  "policies": {
+    "retail": {
+      "home": {
+        "interest_rate": 6.5,
+        "max_loan_amount": 750000,
+        "min_down_payment_pct": 20,
+        "max_tenure_years": 30,
+        "description": "Retail Home Mortgage. Requires minimum credit score of 680."
+      },
+      "auto": {
+        "interest_rate": 5.2,
+        "max_loan_amount": 80000,
+        "min_down_payment_pct": 10,
+        "max_tenure_years": 7,
+        "description": "Retail Auto Loan for new or certified pre-owned vehicles."
+      },
+      "personal": {
+        "interest_rate": 9.8,
+        "max_loan_amount": 35000,
+        "min_down_payment_pct": 0,
+        "max_tenure_years": 5,
+        "description": "Unsecured Retail Personal Loan."
+      }
+    },
+    "corporate": {
+      "commercial_real_estate": {
+        "interest_rate": 7.2,
+        "max_loan_amount": 10000000,
+        "min_down_payment_pct": 25,
+        "max_tenure_years": 25,
+        "description": "Corporate Commercial Real Estate Financing."
+      },
+      "equipment": {
+        "interest_rate": 6.0,
+        "max_loan_amount": 2000000,
+        "min_down_payment_pct": 15,
+        "max_tenure_years": 10,
+        "description": "Commercial Equipment Financing and Leasing."
+      }
+    }
+  },
+  "customers": {
+    "ACC-101": {
+      "name": "Sarah Jenkins",
+      "customer_type": "retail",
+      "credit_score": 745,
+      "pre_approved_limit": 300000,
+      "account_status": "Active (Preferred Tier)"
+    },
+    "ACC-202": {
+      "name": "Acme Industrial Logistics",
+      "customer_type": "corporate",
+      "credit_score": 810,
+      "pre_approved_limit": 2500000,
+      "account_status": "Active (Corporate Platinum)"
+    }
+  }
+}
