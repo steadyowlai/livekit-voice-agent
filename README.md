@@ -70,13 +70,10 @@ An enterprise-grade, real-time conversational voice AI assistant for banking and
 
 - Python 3.12+ (or 3.13)
 - [uv](https://github.com/astral-sh/uv) package manager
-- API Keys:
-  - [LiveKit Cloud](https://cloud.livekit.io/) (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`)
-  - OpenAI (`OPENAI_API_KEY`)
-  - Google Gemini (`GOOGLE_API_KEY`)
-  - AssemblyAI (`ASSEMBLYAI_API_KEY`)
-  - Deepgram (`DEEPGRAM_API_KEY`)
-  - Cartesia (`CARTESIA_API_KEY`)
+- **Required Credentials:**
+  - [LiveKit Cloud](https://cloud.livekit.io/) (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) — *LiveKit Cloud Inference provides hosted models for LLM, STT, and TTS automatically.*
+- **Optional Overrides:**
+  - Direct provider keys (e.g. `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `CARTESIA_API_KEY`, `ASSEMBLYAI_API_KEY`, `DEEPGRAM_API_KEY`) if using your own direct API accounts.
 
 ---
 
