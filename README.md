@@ -1,6 +1,6 @@
-# First National Bank — LiveKit Voice AI Agent
+# Bank Loan Assistant — LiveKit Voice AI Agent
 
-An enterprise-grade, real-time conversational voice AI assistant for banking and loan services, powered by **LiveKit Agents** and integrated with a **FastMCP Server** over Server-Sent Events (SSE).
+A real-time conversational voice AI assistant for banking and loan services, powered by **LiveKit Agents** and integrated with a **FastMCP Server** over Server-Sent Events (SSE).
 
 ---
 
