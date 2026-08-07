@@ -1,135 +1,247 @@
-# Bank Loan Assistant — LiveKit Voice AI Agent
+# livekit-voice-agent
 
-A real-time conversational voice AI assistant for banking and loan services, powered by **LiveKit Agents** and integrated with a **FastMCP Server** over Server-Sent Events (SSE).
-
----
-
-## Architecture Overview
-
-```
-                      ┌───────────────────────────────────────┐
-                      │          Caller Voice Audio           │
-                      └──────────────────┬────────────────────┘
-                                         │ WebRTC
-                                         ▼
-                      ┌───────────────────────────────────────┐
-                      │         LiveKit Voice Pipeline        │
-                      │  • STT: AssemblyAI / Deepgram         │
-                      │  • VAD: Silero + Semantic Turn Model  │
-                      │  • LLM: OpenAI GPT-4.1 / Gemini       │
-                      │  • TTS: Cartesia Sonic / Inworld      │
-                      └──────────────────┬────────────────────┘
-                                         │
-                 ┌───────────────────────┴───────────────────────┐
-                 │                                               │
-                 ▼                                               ▼
-   ┌───────────────────────────┐                   ┌───────────────────────────┐
-   │    Local Function Tool    │                   │   FastMCP Server (SSE)    │
-   │  • calculate_loan_emi     │                   │   http://127.0.0.1:8000   │
-   │    (Calculates exact      │                   ├───────────────────────────┤
-   │     monthly repayment,    │                   │ • list_available_loan_... │
-   │     interest & total cost)│                   │ • fetch_bank_policy       │
-   └───────────────────────────┘                   │ • get_customer_profile    │
-                                                   │ • read_lending_guidelines │
-                                                   └───────────────────────────┘
-```
+A real-time voice AI assistant pipeline integrating **LiveKit Agents**, **LangGraph**, **LangChain**, and **FastMCP**.
 
 ---
 
-## Features
+## Executive Summary (For Engineering Managers)
 
-- **Decoupled Knowledge & Policy Engine (MCP):** Dynamic retrieval of loan products, interest rate policies, customer account profiles, and compliance disclosures via Model Context Protocol.
-- **Real-Time Mathematical Accuracy:** Native LiveKit function tool computes amortization schedules, monthly payments (EMI), and total loan costs on the fly.
-- **Enterprise Multi-Provider Fallbacks:**
-  - **LLM:** OpenAI `gpt-4.1-mini` with automatic failover to Google `gemini-2.5-flash`.
-  - **STT:** AssemblyAI `universal-streaming` with failover to Deepgram `nova-3`.
-  - **TTS:** Cartesia `sonic-3` with failover to Inworld TTS.
-- **Advanced Voice Interaction:**
-  - Silero VAD + Multilingual semantic turn detection for natural interruptions.
-  - Background voice cancellation (BVC) and preemptive audio generation.
-  - Comprehensive turn metrics (TTFT, TTFB, EOU delay, token counts, and durations).
+This project demonstrates how to build a production-grade conversational banking agent by composing four specialized AI frameworks together:
+
+1. **LiveKit Agents (Voice Orchestration):** Manages real-time WebRTC audio streaming, Voice Activity Detection (VAD), Speech-to-Text (STT), Text-to-Speech (TTS), and conversational turn-taking with ultra-low latency.
+2. **LiveKit TaskGroups (Multi-Turn Intake State Machine):** Replaces messy single-prompt data collection with structured, sequential intake stages (`LoanRequestTask` $\rightarrow$ `FinancialProfileTask`) to reliably collect user financials over voice without confusion.
+3. **LangGraph (Deterministic Credit Underwriting):** Eliminates LLM math hallucinations by delegating underwriting calculations, ratio analysis, risk tiering, and approval decisions to a pure, deterministic 3-node computational state graph.
+4. **LangChain (Tool Reusability & Adapters):** Bridges existing enterprise LangChain tools (market interest rate and Fed policy web search) directly into LiveKit using a generic adapter that runs synchronous network I/O in worker threads without stalling real-time audio.
+5. **FastMCP Server (Decoupled Enterprise Knowledge):** Exposes bank product catalogs, customer account data, and compliance guidelines over the Model Context Protocol (SSE transport), maintaining a persistent session connection across all agent tasks.
 
 ---
 
-## Project Structure
+## System Architecture
 
 ```
-├── livekit_agent.py          # Main LiveKit voice pipeline and assistant logic
+                                ┌────────────────────────┐
+                                │   Client Audio Stream  │
+                                └───────────┬────────────┘
+                                            │ WebRTC
+                                            ▼
+                                ┌────────────────────────┐
+                                │      LiveKit Agent     │
+                                │  • STT: AssemblyAI     │
+                                │  • VAD: Silero         │
+                                │  • LLM: OpenAI GPT-4.1 │
+                                │  • TTS: Cartesia       │
+                                └───────────┬────────────┘
+                                            │
+        ┌───────────────────────────────────┼───────────────────────────────────┐
+        │                                   │                                   │
+        ▼                                   ▼                                   ▼
+┌───────────────────────┐       ┌───────────────────────┐       ┌───────────────────────┐
+│   TaskGroup & Graph   │       │   LangChain Adapter   │       │   FastMCP Server      │
+├───────────────────────┤       ├───────────────────────┤       ├───────────────────────┤
+│ • TaskGroup Intake    │       │ • adapt_langchain_tool│       │ • Transport: SSE      │
+│   - LoanRequestTask   │       │ • DuckDuckGo search   │       │ • Port: 8000          │
+│   - FinancialProfile  │       │ • Non-blocking async  │       │ • Endpoints/Tools:    │
+│ • LangGraph StateGraph│       │   via thread pool     │       │   - list_products     │
+│   - calculate_ratios  │       └───────────────────────┘       │   - fetch_policy      │
+│   - eval_credit_risk  │                                       │   - get_profile       │
+│   - underwrite_decide │                                       │   - read_guidelines   │
+│ • Native EMI Tool     │                                       └───────────────────────┘
+└───────────────────────┘
+```
+
+---
+
+## Core Subsystems Explained
+
+### 1. LiveKit TaskGroups: Structured Voice Intake
+**Why it is needed:**
+Collecting 5 different financial numbers in a single open-ended voice conversation often causes LLMs to miss fields, ask redundant questions, or hallucinate. LiveKit's `TaskGroup` pattern turns the application intake into a clean, sequential state machine.
+
+**How it works:**
+1. When the caller asks to apply for a loan, the main agent invokes `evaluate_loan_underwriting`.
+2. Control temporarily transitions to **Stage 1 (`LoanRequestTask`)**, which proactively asks for the loan amount and property value. Once collected, `record_loan_request` completes Stage 1.
+3. The `TaskGroup` immediately advances to **Stage 2 (`FinancialProfileTask`)**, which asks for monthly income, debt payments, and credit score, calling `record_financial_profile`.
+4. When both tasks finish, the aggregated data is handed off to LangGraph, and the final underwriting verdict is returned to the main agent to announce once.
+
+```
+[Main Assistant] ──calls──> evaluate_loan_underwriting()
+                                 │
+                                 ▼
+                          ┌──────────────┐
+                          │  TaskGroup   │
+                          └──────┬───────┘
+                                 │
+       ┌─────────────────────────┴─────────────────────────┐
+       ▼                                                   ▼
+ Stage 1: LoanRequestTask                   Stage 2: FinancialProfileTask
+ - Prompts: loan amount & property value    - Prompts: income, debt, credit score
+ - Completes & cleanly yields               - Completes & cleanly yields
+       │                                                   │
+       └─────────────────────────┬─────────────────────────┘
+                                 ▼
+                    LangGraph Underwriting Graph
+```
+
+---
+
+### 2. LangGraph StateGraph: Deterministic Underwriting Engine
+**Why it is needed:**
+Underwriting requires strict adherence to regulatory rules, Debt-to-Income (DTI) thresholds, Loan-to-Value (LTV) limits, and accurate 30-year fixed loan amortization formulas. Leaving this to an LLM risks mathematical errors and compliance violations.
+
+**How it works:**
+1. We build and compile a pure computational `StateGraph` in `langgraph/stategraph.py`.
+2. We import this graph into the LiveKit agent tools (`livekit_agent/tools/loan_task.py`) and invoke it via `underwriting_graph.ainvoke(initial_state)` upon intake completion.
+3. The graph executes 3 sequential compute nodes:
+   - **`calculate_ratios_node`**: Computes $\text{DTI} = (\text{debt} / \text{income}) \times 100$ and $\text{LTV} = (\text{loan} / \text{property\_val}) \times 100$.
+   - **`evaluate_credit_risk_node`**: Categorizes the credit score into risk tiers (Tier 1 Prime $\ge 740$, Tier 2 Standard $\ge 680$, Tier 3 Near-Prime $\ge 620$, Tier 4 Subprime $< 620$) and sets base interest rates.
+   - **`underwrite_decision_node`**: Evaluates approval rules ($\text{DTI} \le 45\%$, Score $\ge 620$), adds PMI requirements if $\text{LTV} > 80\%$, computes exact monthly payments via amortization formula, and generates a structured verdict.
+
+```python
+# State Schema
+class UnderwritingState(TypedDict):
+    loan_amount: float
+    property_value: float
+    monthly_income: float
+    monthly_debt: float
+    credit_score: int
+    dti_ratio: float
+    ltv_ratio: float
+    credit_tier: str
+    base_interest_rate: float
+    approval_status: str
+    final_interest_rate: float | None
+    estimated_monthly_payment: float | None
+    underwriting_notes: str
+    summary: str
+```
+
+---
+
+### 3. LangChain Tool Adapter: Reusable Enterprise Tools
+**Why it is needed:**
+Enterprises often have established tool repositories written in LangChain (such as web scrapers, vector search, or database queries). Rather than rewriting these tools specifically for LiveKit, we build a generic adapter to import them directly into the voice agent.
+
+**How it works:**
+1. In `langchain/tools.py`, we define standard synchronous LangChain `@tool` functions (`search_market_rates`, `search_fed_policy`).
+2. In `livekit_agent/tools/adapted_tools.py`, we implement `adapt_langchain_tool(lc_tool)`:
+   - `@functools.wraps(lc_tool.func)` copies the function signature, argument types, and docstrings so LiveKit automatically generates the OpenAI/Gemini JSON tool schema for the LLM.
+   - `asyncio.to_thread` runs the synchronous web search on a background worker thread so live HTTP calls never freeze the real-time audio pipeline or Speech-to-Text processing.
+3. Existing LangChain tools are adapted in single clean statements:
+   ```python
+   adapted_search_market_rates = adapt_langchain_tool(search_market_rates)
+   adapted_search_fed_policy = adapt_langchain_tool(search_fed_policy)
+   ```
+
+---
+
+### 4. FastMCP Server: Decoupled Knowledge & Policy Layer
+**Why it is needed:**
+Banking product offerings, interest rate policies, and customer records should live in an independent service rather than being hardcoded into the voice bot. Anthropic's Model Context Protocol (MCP) provides a standardized protocol for exposing these tools.
+
+**How it works:**
+1. A FastMCP server (`mcp/mcp_server.py`) runs as a standalone service on `http://127.0.0.1:8000/sse` using Server-Sent Events (SSE).
+2. In `livekit_agent/main.py`, the MCP server is registered at the **session level** using `tools=[MCPToolset(id="bank_mcp", mcp_server=MCPServerHTTP(...))]`.
+3. Because the toolset is session-scoped, the connection stays open permanently throughout the call, surviving sub-agent handoffs and task transitions.
+4. The server exposes:
+   - `list_available_loan_products`: Retail & commercial loan catalogs with interest rate ranges and borrowing limits.
+   - `fetch_bank_policy`: Policy limits, minimum credit scores, and down payment requirements.
+   - `get_customer_profile`: Account verification and pre-approval status.
+   - `read_lending_guidelines`: Regulatory compliance and closing document checklists.
+
+---
+
+### 5. Native EMI Calculator Tool: Instant Ad-Hoc Math
+**Why it is needed:**
+When customers ask quick hypothetical questions during a call (e.g. *"What would my payment be for $250k at 6.5% over 20 years?"*), the agent needs a fast, direct calculation tool that runs locally without invoking external services.
+
+**How it works:**
+1. Implemented in `livekit_agent/tools/emi_calculator.py` as a native `@llm.function_tool`.
+2. Takes `principal`, `interest_rate`, and `tenure_years`, validates inputs, applies the standard amortization formula, and returns monthly payment, total interest, and total cost in milliseconds.
+
+---
+
+## Directory Structure
+
+```
+├── livekit_agent.py              # CLI entrypoint
+├── livekit_agent/
+│   ├── main.py                   # Worker setup, pipeline initialization, session MCP config
+│   ├── assistant.py              # Assistant agent definition and tool binding
+│   └── tools/
+│       ├── __init__.py           # Unified tool exports
+│       ├── loan_task.py          # TaskGroup intake flow and LangGraph evaluation
+│       ├── emi_calculator.py     # Native loan amortization calculator
+│       ├── adapted_tools.py      # Standard LangChain-to-LiveKit tool adapter
+│       └── underwriting.py       # LangGraph invocation wrapper
+├── langchain/
+│   └── tools.py                  # LangChain search tools (market rates, Fed policy)
+├── langgraph/
+│   └── stategraph.py             # 3-node Underwriting StateGraph
 ├── mcp/
-│   ├── mcp_server.py         # FastMCP Server running on SSE transport
-│   ├── db.json               # Mock banking database (rates, products, accounts)
-│   └── bank_guidelines.txt   # Lending guidelines & compliance disclosures
-├── pyproject.toml            # Project dependencies managed by uv
-├── .env.example              # Environment variables template
-└── README.md                 # Project documentation
+│   ├── mcp_server.py             # FastMCP SSE server
+│   ├── db.json                   # Mock banking database
+│   └── bank_guidelines.txt       # Policy documentation
+└── pyproject.toml                # Project configuration and dependencies
 ```
-
----
-
-## Prerequisites
-
-- Python 3.12+ (or 3.13)
-- [uv](https://github.com/astral-sh/uv) package manager
-- **Required Credentials:**
-  - [LiveKit Cloud](https://cloud.livekit.io/) (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) — *LiveKit Cloud Inference provides hosted models for LLM, STT, and TTS automatically.*
-- **Optional Overrides:**
-  - Direct provider keys (e.g. `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `CARTESIA_API_KEY`, `ASSEMBLYAI_API_KEY`, `DEEPGRAM_API_KEY`) if using your own direct API accounts.
 
 ---
 
 ## Setup & Installation
 
-1. **Clone the repository and navigate into the folder:**
-   ```bash
-   git clone <repo-url>
-   cd livekit-voice-agent
-   ```
+### Requirements
+- Python >= 3.12
+- [uv](https://github.com/astral-sh/uv) package manager
+- LiveKit Cloud credentials (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`)
 
-2. **Install dependencies using `uv`:**
-   ```bash
-   uv sync
-   ```
+### Installation
+```bash
+git clone <repo-url>
+cd livekit-voice-agent
+uv sync
+```
 
-3. **Configure Environment Variables:**
-   Create a `.env` file from the template:
-   ```bash
-   cp .env.example .env
-   ```
-   Fill in your API keys in `.env`.
+### Environment Configuration
+```bash
+cp .env.example .env
+```
+Populate `.env` with required API keys:
+```env
+LIVEKIT_URL=wss://...
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+```
 
 ---
 
 ## Running the Application
 
-### Step 1: Start the MCP Server
-In your first terminal, start the FastMCP policy server over SSE:
+### 1. Start the MCP Server
+In your first terminal, start the FastMCP server:
 ```bash
 uv run mcp/mcp_server.py
 ```
-*The server will start listening on `http://127.0.0.1:8000/sse`.*
+*Server runs on `http://127.0.0.1:8000/sse`.*
 
-### Step 2: Start the LiveKit Voice Agent
-In a second terminal, launch the voice agent in local console mode:
+### 2. Start the LiveKit Voice Agent Worker
+In a second terminal, launch the agent worker:
+
+**Console Mode (Local audio testing via microphone & speaker):**
 ```bash
 uv run livekit_agent.py console
 ```
 
+**Dev Mode (Connects to LiveKit Cloud Room via WebRTC):**
+```bash
+uv run livekit_agent.py dev
+```
+
 ---
 
-## Sample Voice Prompts to Try
+## Verification & Test Scenarios
 
-- **Product Catalog Inquiries:**
-  > *"What retail loan products do you offer?"*
-  > *(Queries MCP tool: `list_available_loan_products`)*
-
-- **Policy Lookups:**
-  > *"What is the standard interest rate and down payment required for a retail personal loan?"*
-  > *(Queries MCP tool: `fetch_bank_policy`)*
-
-- **Loan Calculations:**
-  > *"If I borrow $250,000 for a home loan at 6.5% interest over 20 years, what will my monthly payment be?"*
-  > *(Executes native tool: `calculate_loan_emi`)*
-
-- **Customer Profile & Compliance:**
-  > *"Can you check account ACC-101 and tell me what documents I need to bring for my loan closing?"*
-  > *(Queries MCP tools: `get_customer_profile` and `read_lending_guidelines`)*
+| Capability | Sample User Voice Prompt | Underlying Subsystem & Execution Flow | Expected Outcome |
+|---|---|---|---|
+| **Loan Underwriting** | *"I'd like to apply for a loan."* | `evaluate_loan_underwriting` $\rightarrow$ `TaskGroup` (Stages 1 & 2) $\rightarrow$ LangGraph | Sequentially collects loan amount, property value, income, debt, and credit score; executes LangGraph; speaks approval status, rate, and monthly payment. |
+| **Market Rates** | *"What are current 30-year mortgage rates?"* | `adapted_search_market_rates` (LangChain Adapter) | Runs LangChain DuckDuckGo search in background worker thread; returns trimmed rate summary without audio stutter. |
+| **Product Inquiries** | *"What commercial loan options do you offer?"* | `list_available_loan_products` (FastMCP SSE) | Queries FastMCP server over SSE; returns commercial real estate and equipment loan terms. |
+| **Loan Calculations** | *"Calculate monthly payment for $200k at 6% over 30 years."* | `calculate_loan_emi` (Native Tool) | Computes exact amortization formula and returns monthly payment + total interest. |
