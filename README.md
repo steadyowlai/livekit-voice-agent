@@ -4,7 +4,7 @@ A real-time voice AI assistant pipeline integrating **LiveKit Agents**, **LangGr
 
 ---
 
-## Executive Summary (For Engineering Managers)
+## Summary
 
 This project demonstrates how to build a production-grade conversational banking agent by composing four specialized AI frameworks together:
 
