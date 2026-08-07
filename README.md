@@ -9,7 +9,7 @@ A real-time voice AI assistant pipeline integrating **LiveKit Agents**, **LangGr
 This project demonstrates how to build a production-grade conversational banking agent by composing four specialized AI frameworks together:
 
 1. **LiveKit Agents (Voice Orchestration):** Manages real-time WebRTC audio streaming, Voice Activity Detection (VAD), Speech-to-Text (STT), Text-to-Speech (TTS), and conversational turn-taking with ultra-low latency.
-2. **LiveKit TaskGroups (Multi-Turn Intake State Machine):** Replaces messy single-prompt data collection with structured, sequential intake stages (`LoanRequestTask` $\rightarrow$ `FinancialProfileTask`) to reliably collect user financials over voice without confusion.
+2. **LiveKit TaskGroups (Multi-Turn Intake State Machine):** Replaces messy single-prompt data collection with structured, sequential intake stages (`LoanRequestTask` → `FinancialProfileTask`) to reliably collect user financials over voice without confusion.
 3. **LangGraph (Deterministic Credit Underwriting):** Eliminates LLM math hallucinations by delegating underwriting calculations, ratio analysis, risk tiering, and approval decisions to a pure, deterministic 3-node computational state graph.
 4. **LangChain (Tool Reusability & Adapters):** Bridges existing enterprise LangChain tools (market interest rate and Fed policy web search) directly into LiveKit using a generic adapter that runs synchronous network I/O in worker threads without stalling real-time audio.
 5. **FastMCP Server (Decoupled Enterprise Knowledge):** Exposes bank product catalogs, customer account data, and compliance guidelines over the Model Context Protocol (SSE transport), maintaining a persistent session connection across all agent tasks.
@@ -92,9 +92,13 @@ Underwriting requires strict adherence to regulatory rules, Debt-to-Income (DTI)
 1. We build and compile a pure computational `StateGraph` in `langgraph/stategraph.py`.
 2. We import this graph into the LiveKit agent tools (`livekit_agent/tools/loan_task.py`) and invoke it via `underwriting_graph.ainvoke(initial_state)` upon intake completion.
 3. The graph executes 3 sequential compute nodes:
-   - **`calculate_ratios_node`**: Computes $\text{DTI} = (\text{debt} / \text{income}) \times 100$ and $\text{LTV} = (\text{loan} / \text{property\_val}) \times 100$.
-   - **`evaluate_credit_risk_node`**: Categorizes the credit score into risk tiers (Tier 1 Prime $\ge 740$, Tier 2 Standard $\ge 680$, Tier 3 Near-Prime $\ge 620$, Tier 4 Subprime $< 620$) and sets base interest rates.
-   - **`underwrite_decision_node`**: Evaluates approval rules ($\text{DTI} \le 45\%$, Score $\ge 620$), adds PMI requirements if $\text{LTV} > 80\%$, computes exact monthly payments via amortization formula, and generates a structured verdict.
+   - **`calculate_ratios_node`**: Computes `DTI = (monthly_debt / monthly_income) * 100` and `LTV = (loan_amount / property_value) * 100`.
+   - **`evaluate_credit_risk_node`**: Categorizes the credit score into risk tiers:
+     - Tier 1 (Prime): Credit Score >= 740, Base Rate = 6.25%
+     - Tier 2 (Standard): Credit Score >= 680, Base Rate = 6.75%
+     - Tier 3 (Near-Prime): Credit Score >= 620, Base Rate = 7.50%
+     - Tier 4 (Subprime): Credit Score < 620, Base Rate = 9.25%
+   - **`underwrite_decision_node`**: Evaluates approval rules (`DTI <= 45%`, `Credit Score >= 620`), adds PMI requirements and rate adjustment (+0.25%) if `LTV > 80%` or `DTI > 38%`, computes exact monthly payments via 30-year fixed amortization formula, and generates a structured verdict.
 
 ```python
 # State Schema
@@ -241,7 +245,7 @@ uv run livekit_agent.py dev
 
 | Capability | Sample User Voice Prompt | Underlying Subsystem & Execution Flow | Expected Outcome |
 |---|---|---|---|
-| **Loan Underwriting** | *"I'd like to apply for a loan."* | `evaluate_loan_underwriting` $\rightarrow$ `TaskGroup` (Stages 1 & 2) $\rightarrow$ LangGraph | Sequentially collects loan amount, property value, income, debt, and credit score; executes LangGraph; speaks approval status, rate, and monthly payment. |
+| **Loan Underwriting** | *"I'd like to apply for a loan."* | `evaluate_loan_underwriting` → `TaskGroup` (Stages 1 & 2) → LangGraph | Sequentially collects loan amount, property value, income, debt, and credit score; executes LangGraph; speaks approval status, rate, and monthly payment. |
 | **Market Rates** | *"What are current 30-year mortgage rates?"* | `adapted_search_market_rates` (LangChain Adapter) | Runs LangChain DuckDuckGo search in background worker thread; returns trimmed rate summary without audio stutter. |
 | **Product Inquiries** | *"What commercial loan options do you offer?"* | `list_available_loan_products` (FastMCP SSE) | Queries FastMCP server over SSE; returns commercial real estate and equipment loan terms. |
 | **Loan Calculations** | *"Calculate monthly payment for $200k at 6% over 30 years."* | `calculate_loan_emi` (Native Tool) | Computes exact amortization formula and returns monthly payment + total interest. |
