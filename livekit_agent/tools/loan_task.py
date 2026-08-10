@@ -166,6 +166,7 @@ async def evaluate_loan_underwriting() -> str:
     }
 
     # Cache the inputs so revise_loan_underwriting can patch them later
+    # Don't use global in production. just for demo purpose.
     global _last_underwriting_state
     _last_underwriting_state = initial_state.copy()
 
@@ -220,11 +221,12 @@ async def revise_loan_underwriting(
     # Patch only the fields the caller wants to change; carry over everything else
     revised_state: UnderwritingState = {
         **_last_underwriting_state,
-        # Reset computed fields so LangGraph recalculates them cleanly
+        #These fields will always be None
+        #having them here just to remind schema 
         "dti_ratio": None,
         "ltv_ratio": None,
         "credit_tier": None,
-        "base_interest_rate": None,
+        "base_interest_rate": None, 
         "status": None,
         "approved_interest_rate": None,
         "estimated_monthly_payment": None,
