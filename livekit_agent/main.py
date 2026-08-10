@@ -17,6 +17,7 @@ from livekit.agents import (
     tts,
 )
 from livekit.agents.llm.mcp import MCPServerHTTP, MCPToolset
+from livekit.agents import TurnHandlingOptions
 from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
@@ -41,12 +42,10 @@ async def entrypoint(ctx: JobContext):
                 inference.LLM(model="google/gemini-2.5-flash"),
             ]
         ),
-        # STT with fallback: AssemblyAI primary, Deepgram backup
+        # STT with fallback: Deepgram Flux primary, Nova-3 backup
         stt=stt.FallbackAdapter(
             [
-                inference.STT.from_model_string(
-                    "assemblyai/universal-streaming:en"
-                ),
+                inference.STT.from_model_string("deepgram/flux-general-en"),
                 inference.STT.from_model_string("deepgram/nova-3"),
             ]
         ),
@@ -60,7 +59,11 @@ async def entrypoint(ctx: JobContext):
             ]
         ),
         vad=silero.VAD.load(),
-        turn_detection=MultilingualModel(),  # Semantic turn detection
+        # Flux fires end-of-turn signals natively; turn_detection="stt" delegates to it.
+        # NOTE: If Flux fails over to Nova-3, Nova-3 does NOT emit native end-of-turn signals.
+        # In that case, swap these two lines: comment out turn_handling and re-enable turn_detection.
+        turn_handling=TurnHandlingOptions(turn_detection="stt"),
+        # turn_detection=MultilingualModel(),  # Use this instead when falling back to Nova-3
         preemptive_generation=True,
         # Session-scoped MCP Toolset: survives all agent handoffs and TaskGroup transitions
         tools=[

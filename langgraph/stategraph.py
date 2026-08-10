@@ -74,53 +74,66 @@ def evaluate_credit_risk_node(state: UnderwritingState) -> dict:
 
 # Evaluates bank underwriting policies, risk limits, and computes monthly payments
 def underwrite_decision_node(state: UnderwritingState) -> dict:
-    dti = state["dti_ratio"]
     ltv = state["ltv_ratio"]
     score = state["credit_score"]
     base_rate = state["base_interest_rate"]
     loan = state["loan_amount"]
+    income = state["monthly_income"]
+    debt = state["monthly_debt"]
 
-    # Decline if credit score is below minimum cutoff or DTI exceeds regulatory limits
+    # 1. Compute Loan-to-Income (LTI)
+    annual_income = income * 12
+    lti = round(loan / annual_income, 2) if annual_income > 0 else float('inf')
+
+    # 2. Determine pricing and calculate projected monthly payment
+    # Surcharge if LTV > 80% (PMI requirement)
+    final_rate = base_rate + 0.25 if ltv > 80.0 else base_rate
+    
+    r = (final_rate / 100) / 12
+    n = 30 * 12
+    emi = round((loan * r * ((1 + r) ** n)) / (((1 + r) ** n) - 1), 2)
+    
+    # 3. Calculate true back-end DTI (including the new mortgage payment)
+    total_dti = round(((debt + emi) / income) * 100, 2) if income > 0 else float('inf')
+
+    # 4. Evaluate hard limits and rules
     if score < 620:
         status = "DECLINED"
         reason = f"Credit score ({score}) is below the bank's minimum qualification cutoff of 620."
         final_rate = None
         emi = None
-    elif dti > 45.0:
+    elif ltv > 95.0:
         status = "DECLINED"
-        reason = f"Debt-to-Income ratio ({dti}%) exceeds the maximum regulatory threshold of 45%."
+        reason = f"Loan-to-Value ratio ({ltv}%) exceeds the absolute maximum of 95%."
         final_rate = None
         emi = None
-
-    # Conditional approval if LTV requires insurance or DTI is in elevated range
-    elif ltv > 80.0 or dti > 38.0:
+    elif lti > 5.0:
+        status = "DECLINED"
+        reason = f"Loan amount exceeds 5x annual income limit (LTI is {lti}x)."
+        final_rate = None
+        emi = None
+    elif total_dti > 45.0:
+        status = "DECLINED"
+        reason = f"Total Debt-to-Income ratio ({total_dti}%) including the new mortgage exceeds the 45% maximum."
+        final_rate = None
+        emi = None
+    elif ltv > 80.0 or total_dti > 38.0:
         status = "CONDITIONAL_APPROVAL"
-        final_rate = base_rate + 0.25
         reason = (
             f"Conditional approval granted. LTV is {ltv}% (requires Private Mortgage Insurance) "
-            f"and DTI is {dti}%."
+            f"and total DTI is {total_dti}%."
         )
-        # Standard 30-year fixed loan amortization formula
-        r = (final_rate / 100) / 12
-        n = 30 * 12
-        emi = round((loan * r * ((1 + r) ** n)) / (((1 + r) ** n) - 1), 2)
-
-    # Full approval for prime credit and healthy financial ratios
     else:
         status = "APPROVED"
-        final_rate = base_rate
-        reason = f"Fully qualified with strong credit ({score}), healthy DTI ({dti}%), and solid LTV ({ltv}%)."
-        # Standard 30-year fixed loan amortization formula
-        r = (final_rate / 100) / 12
-        n = 30 * 12
-        emi = round((loan * r * ((1 + r) ** n)) / (((1 + r) ** n) - 1), 2)
+        reason = f"Fully qualified with strong credit ({score}), healthy total DTI ({total_dti}%), and solid LTV ({ltv}%)."
 
     # Format human-readable summary for voice synthesizer and logging
     summary_text = (
         f"Loan Underwriting Result: {status}\n"
         f"- Credit Tier: {state['credit_tier']}\n"
-        f"- Debt-to-Income (DTI): {dti}%\n"
+        f"- Total DTI (Back-End): {total_dti}%\n"
         f"- Loan-to-Value (LTV): {ltv}%\n"
+        f"- Loan-to-Income (LTI): {lti}x\n"
         f"- Approved Rate: {f'{final_rate}%' if final_rate else 'N/A'}\n"
         f"- Monthly Payment (30-yr): {f'${emi:,.2f}' if emi else 'N/A'}\n"
         f"- Underwriting Notes: {reason}"
