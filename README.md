@@ -62,24 +62,34 @@ Collecting 5 different financial numbers in a single open-ended voice conversati
 2. Control temporarily transitions to **Stage 1 (`LoanRequestTask`)**, which proactively asks for the loan amount and property value. Once collected, `record_loan_request` completes Stage 1.
 3. The `TaskGroup` immediately advances to **Stage 2 (`FinancialProfileTask`)**, which asks for monthly income, debt payments, and credit score, calling `record_financial_profile`.
 4. When both tasks finish, the aggregated data is handed off to LangGraph, and the final underwriting verdict is returned to the main agent to announce once.
+5. **State Revision:** The final state is cached in memory. If the user later corrects a value (e.g., *"actually, the property is $2M"*), the agent calls `revise_loan_underwriting` to patch the cache and re-run the LangGraph engine instantly, skipping the intake interview entirely.
 
-```
-[Main Assistant] ──calls──> evaluate_loan_underwriting()
-                                 │
-                                 ▼
-                          ┌──────────────┐
-                          │  TaskGroup   │
-                          └──────┬───────┘
-                                 │
-       ┌─────────────────────────┴─────────────────────────┐
-       ▼                                                   ▼
- Stage 1: LoanRequestTask                   Stage 2: FinancialProfileTask
- - Prompts: loan amount & property value    - Prompts: income, debt, credit score
- - Completes & passes control               - Completes & passes control
-       │                                                   │
-       └─────────────────────────┬─────────────────────────┘
-                                 ▼
-                    LangGraph Underwriting Graph
+```text
+[Main Assistant]
+       │
+       ├─(Initial)──> evaluate_loan_underwriting()
+       │                   │
+       │                   ▼
+       │            ┌──────────────┐
+       │            │  TaskGroup   │
+       │            └──────┬───────┘
+       │                   │
+       │ ┌─────────────────┴─────────────────┐
+       │ ▼                                   ▼
+       │ Stage 1: LoanRequestTask      Stage 2: FinancialProfileTask
+       │ - Prompts: loan/property      - Prompts: income/debt/credit
+       │ - Completes & passes control  - Completes & passes control
+       │ │                                   │
+       │ └─────────────────┬─────────────────┘
+       │                   │ (Data Aggregation & Cache)
+       │                   ▼
+       │
+       └─(Revision)─> revise_loan_underwriting()
+                           │ (Bypasses TaskGroup, patches cache)
+                           │
+             ┌─────────────┴─────────────┐
+             ▼                           ▼
+            LangGraph Underwriting Graph
 ```
 
 ---
@@ -246,6 +256,7 @@ uv run livekit_agent.py dev
 | Capability | Sample User Voice Prompt | Underlying Subsystem & Execution Flow | Expected Outcome |
 |---|---|---|---|
 | **Loan Underwriting** | *"I'd like to apply for a loan."* | `evaluate_loan_underwriting` → `TaskGroup` (Stages 1 & 2) → LangGraph | Sequentially collects loan amount, property value, income, debt, and credit score; executes LangGraph; speaks approval status, rate, and monthly payment. |
+| **Underwriting Revision** | *"Actually, my income is $25k, not $20k."* | `revise_loan_underwriting` → LangGraph | Patches the cached state with the new income and instantly re-runs the underwriting graph without restarting the interview. |
 | **Market Rates** | *"What are current 30-year mortgage rates?"* | `adapted_search_market_rates` (LangChain Adapter) | Runs LangChain DuckDuckGo search in background worker thread; returns trimmed rate summary without audio stutter. |
 | **Product Inquiries** | *"What commercial loan options do you offer?"* | `list_available_loan_products` (FastMCP SSE) | Queries FastMCP server over SSE; returns commercial real estate and equipment loan terms. |
 | **Loan Calculations** | *"Calculate monthly payment for $200k at 6% over 30 years."* | `calculate_loan_emi` (Native Tool) | Computes exact amortization formula and returns monthly payment + total interest. |
