@@ -9,6 +9,7 @@ Follows the official LiveKit TaskGroup pattern:
 """
 
 from dataclasses import dataclass
+from typing import Optional
 from livekit.agents import AgentTask, RunContext, llm
 from livekit.agents.beta.workflows import TaskGroup
 
@@ -16,7 +17,16 @@ from langgraph.stategraph import underwriting_graph, UnderwritingState
 
 
 # =====================================================================
-# 1. Result Dataclasses for TaskGroup Stages
+# Session-scoped State Cache (survives across tool calls)
+# =====================================================================
+
+# Stores the last set of underwriting inputs so the caller can revise a
+# single field (e.g. property_value) without re-running the full interview.
+_last_underwriting_state: Optional[UnderwritingState] = None
+
+
+# =====================================================================
+# Result Dataclasses for TaskGroup Stages
 # =====================================================================
 
 @dataclass
@@ -35,7 +45,7 @@ class FinancialProfileResult:
 
 
 # =====================================================================
-# 2. Stage 1 Task: Loan Details & Collateral Intake
+# Stage 1 Task: Loan Details & Collateral Intake
 # =====================================================================
 
 class LoanRequestTask(AgentTask[LoanRequestResult]):
@@ -71,7 +81,7 @@ class LoanRequestTask(AgentTask[LoanRequestResult]):
 
 
 # =====================================================================
-# 3. Stage 2 Task: Financial Assessment & Borrower Capacity
+# Stage 2 Task: Financial Assessment & Borrower Capacity
 # =====================================================================
 
 class FinancialProfileTask(AgentTask[FinancialProfileResult]):
@@ -109,7 +119,7 @@ class FinancialProfileTask(AgentTask[FinancialProfileResult]):
 
 
 # =====================================================================
-# 4. Main Tool: Orchestrates TaskGroup & Invokes LangGraph StateGraph
+# Main Tool: Orchestrates TaskGroup & Invokes LangGraph StateGraph
 # =====================================================================
 
 @llm.function_tool
@@ -155,6 +165,10 @@ async def evaluate_loan_underwriting() -> str:
         "summary": None,
     }
 
+    # Cache the inputs so revise_loan_underwriting can patch them later
+    global _last_underwriting_state
+    _last_underwriting_state = initial_state.copy()
+
     # Invoke the pure LangGraph StateGraph asynchronously
     result = await underwriting_graph.ainvoke(initial_state)
 
@@ -173,6 +187,83 @@ async def evaluate_loan_underwriting() -> str:
     # Return structured decision result directly to the Assistant
     return (
         f"Loan Underwriting Result:\n"
+        f"- Status: {result.get('status')}\n"
+        f"- Credit Tier: {result.get('credit_tier')}\n"
+        f"- Approved Interest Rate: {rate_str}\n"
+        f"- Requested Loan Amount: ${result.get('loan_amount', 0):,.2f}\n"
+        f"- Estimated Monthly Payment: {payment_str}\n"
+        f"- Decision Reason: {result.get('decision_reason')}"
+    )
+
+
+# =====================================================================
+# Revision Tool: Re-runs the graph with a patched field, no re-interview
+# =====================================================================
+
+@llm.function_tool
+async def revise_loan_underwriting(
+    loan_amount: Optional[float] = None,
+    property_value: Optional[float] = None,
+    monthly_income: Optional[float] = None,
+    monthly_debt: Optional[float] = None,
+    credit_score: Optional[int] = None,
+) -> str:
+    """
+    Revise one or more fields from the previous underwriting assessment and re-run the decision.
+    Only call this after evaluate_loan_underwriting has already been completed in this session.
+    Pass only the fields the caller wants to correct; all other values are carried over from the previous run.
+    """
+    global _last_underwriting_state
+    if _last_underwriting_state is None:
+        return "No previous underwriting assessment found. Please run a full evaluation first."
+
+    # Patch only the fields the caller wants to change; carry over everything else
+    revised_state: UnderwritingState = {
+        **_last_underwriting_state,
+        # Reset computed fields so LangGraph recalculates them cleanly
+        "dti_ratio": None,
+        "ltv_ratio": None,
+        "credit_tier": None,
+        "base_interest_rate": None,
+        "status": None,
+        "approved_interest_rate": None,
+        "estimated_monthly_payment": None,
+        "decision_reason": None,
+        "summary": None,
+    }
+
+    if loan_amount is not None:
+        revised_state["loan_amount"] = loan_amount
+    if property_value is not None:
+        revised_state["property_value"] = property_value
+    if monthly_income is not None:
+        revised_state["monthly_income"] = monthly_income
+    if monthly_debt is not None:
+        revised_state["monthly_debt"] = monthly_debt
+    if credit_score is not None:
+        revised_state["credit_score"] = credit_score
+
+    # Update the cache with the revised inputs for any further revisions
+    _last_underwriting_state = {
+        k: revised_state[k]
+        for k in ("loan_amount", "property_value", "monthly_income", "monthly_debt", "credit_score")
+    }
+
+    result = await underwriting_graph.ainvoke(revised_state)
+
+    rate_str = (
+        f"{result['approved_interest_rate']}%"
+        if result.get("approved_interest_rate") is not None
+        else "N/A"
+    )
+    payment_str = (
+        f"${result['estimated_monthly_payment']:,.2f}"
+        if result.get("estimated_monthly_payment") is not None
+        else "N/A"
+    )
+
+    return (
+        f"Revised Loan Underwriting Result:\n"
         f"- Status: {result.get('status')}\n"
         f"- Credit Tier: {result.get('credit_tier')}\n"
         f"- Approved Interest Rate: {rate_str}\n"

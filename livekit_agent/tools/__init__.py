@@ -6,6 +6,7 @@ from livekit_agent.tools.adapted_tools import (
 )
 from livekit_agent.tools.loan_task import (
     evaluate_loan_underwriting,
+    revise_loan_underwriting,
     LoanRequestTask,
     LoanRequestResult,
     FinancialProfileTask,
@@ -18,6 +19,7 @@ __all__ = [
     "adapted_search_market_rates",
     "adapted_search_fed_policy",
     "evaluate_loan_underwriting",
+    "revise_loan_underwriting",
     "LoanRequestTask",
     "LoanRequestResult",
     "FinancialProfileTask",
