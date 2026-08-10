@@ -67,29 +67,29 @@ Collecting 5 different financial numbers in a single open-ended voice conversati
 ```text
 [Main Assistant]
        │
-       ├─(Initial)──> evaluate_loan_underwriting()
-       │                   │
-       │                   ▼
-       │            ┌──────────────┐
-       │            │  TaskGroup   │
-       │            └──────┬───────┘
-       │                   │
-       │ ┌─────────────────┴─────────────────┐
-       │ ▼                                   ▼
-       │ Stage 1: LoanRequestTask      Stage 2: FinancialProfileTask
-       │ - Prompts: loan/property      - Prompts: income/debt/credit
-       │ - Completes & passes control  - Completes & passes control
-       │ │                                   │
-       │ └─────────────────┬─────────────────┘
-       │                   │ (Data Aggregation & Cache)
-       │                   ▼
-       │
-       └─(Revision)─> revise_loan_underwriting()
-                           │ (Bypasses TaskGroup, patches cache)
-                           │
-             ┌─────────────┴─────────────┐
-             ▼                           ▼
-            LangGraph Underwriting Graph
+       ├─[Initial Flow] ─────────┐
+       │                         ▼
+       │             evaluate_loan_underwriting()
+       │                         │
+       │                  ┌──────▼──────┐
+       │                  │  TaskGroup  │
+       │                  └──────┬──────┘
+       │       ┌─────────────────┴─────────────────┐
+       │       ▼                                   ▼
+       │    Stage 1: LoanRequestTask      Stage 2: FinancialProfileTask
+       │    - Prompts: loan/property      - Prompts: income/debt/credit
+       │    - Completes                     - Completes 
+       │       │                                   │
+       │       └─────────────────┬─────────────────┘
+       │                         │ (Data Aggregation & Cache)
+       │                         │
+       └─[Revision Flow] ────────│────────┐
+                                 │        ▼
+                                 │    revise_loan_underwriting()
+                                 │        │ (Bypasses TaskGroup, patches cache)
+                                 │        │
+                                 ▼        ▼
+                      LangGraph Underwriting Graph
 ```
 
 ---
