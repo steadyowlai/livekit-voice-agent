@@ -75,7 +75,7 @@ Collecting 5 different financial numbers in a single open-ended voice conversati
        ▼                                                   ▼
  Stage 1: LoanRequestTask                   Stage 2: FinancialProfileTask
  - Prompts: loan amount & property value    - Prompts: income, debt, credit score
- - Completes & cleanly yields               - Completes & cleanly yields
+ - Completes & passes control               - Completes & passes control
        │                                                   │
        └─────────────────────────┬─────────────────────────┘
                                  ▼
