@@ -22,6 +22,7 @@ from livekit.plugins import noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from livekit_agent.assistant import Assistant
+from livekit_agent.session_state import SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # Configure the voice pipeline with STT, LLM, TTS, VAD, and MCP providers
-    session = AgentSession(
+    session = AgentSession[SessionState](
         # LLM with fallback: OpenAI primary, Gemini backup
         llm=llm.FallbackAdapter(
             [
@@ -75,6 +76,8 @@ async def entrypoint(ctx: JobContext):
                 ),
             )
         ],
+        # Initialize fresh, isolated state for this specific caller
+        userdata=SessionState(),
     )
 
     #########################################

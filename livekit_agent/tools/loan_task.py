@@ -9,20 +9,12 @@ Follows the official LiveKit TaskGroup pattern:
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, cast
 from livekit.agents import AgentTask, RunContext, llm
 from livekit.agents.beta.workflows import TaskGroup
 
 from langgraph.stategraph import underwriting_graph, UnderwritingState
-
-
-# =====================================================================
-# Session-scoped State Cache (survives across tool calls)
-# =====================================================================
-
-# Stores the last set of underwriting inputs so the caller can revise a
-# single field (e.g. property_value) without re-running the full interview.
-_last_underwriting_state: Optional[UnderwritingState] = None
+from livekit_agent.session_state import SessionState
 
 
 # =====================================================================
@@ -123,7 +115,7 @@ class FinancialProfileTask(AgentTask[FinancialProfileResult]):
 # =====================================================================
 
 @llm.function_tool
-async def evaluate_loan_underwriting() -> str:
+async def evaluate_loan_underwriting(context: RunContext["SessionState"]) -> str:
     """Start the structured 2-step loan pre-qualification interview to assess eligibility and compute an underwriting decision."""
     # Build the 2-stage TaskGroup workflow
     group = (
@@ -165,10 +157,8 @@ async def evaluate_loan_underwriting() -> str:
         "summary": None,
     }
 
-    # Cache the inputs so revise_loan_underwriting can patch them later
-    # Don't use global in production. just for demo purpose.
-    global _last_underwriting_state
-    _last_underwriting_state = initial_state.copy()
+    # Cache the inputs into the per-session userdata so revise_loan_underwriting can patch them later
+    context.userdata.loan.last_underwriting_state = initial_state.copy()
 
     # Invoke the pure LangGraph StateGraph asynchronously
     result = await underwriting_graph.ainvoke(initial_state)
@@ -203,6 +193,7 @@ async def evaluate_loan_underwriting() -> str:
 
 @llm.function_tool
 async def revise_loan_underwriting(
+    context: RunContext["SessionState"],
     loan_amount: Optional[float] = None,
     property_value: Optional[float] = None,
     monthly_income: Optional[float] = None,
@@ -214,26 +205,25 @@ async def revise_loan_underwriting(
     Only call this after evaluate_loan_underwriting has already been completed in this session.
     Pass only the fields the caller wants to correct; all other values are carried over from the previous run.
     """
-    global _last_underwriting_state
-    if _last_underwriting_state is None:
+    if context.userdata.loan.last_underwriting_state is None:
         return "No previous underwriting assessment found. Please run a full evaluation first."
 
-    # Patch only the fields the caller wants to change; carry over everything else
+    # We start by carrying over everything from the previous assessment. 
+    # This acts as our baseline so the user doesn't have to repeat information 
+    # for the fields they aren't changing.
     revised_state: UnderwritingState = {
-        **_last_underwriting_state,
-        #These fields will always be None
-        #having them here just to remind schema 
-        "dti_ratio": None,
-        "ltv_ratio": None,
-        "credit_tier": None,
-        "base_interest_rate": None, 
-        "status": None,
-        "approved_interest_rate": None,
-        "estimated_monthly_payment": None,
-        "decision_reason": None,
-        "summary": None,
+        **context.userdata.loan.last_underwriting_state,
     }
 
+    # Because arguments default to None, only the values explicitly passed by the user will be not None.
+    # We only update the revised_state for those fields. The rest will remain as their old values.
+    #
+    # Example:
+    #   Old state: loan_amount=300_000, credit_score=720
+    #   User passes: revise_loan_underwriting(credit_score=750)
+    #   
+    #   - credit_score is not None (750), so we update revised_state["credit_score"]
+    #   - loan_amount is not passed, so it's None, thus revised_state["loan_amount"] is not updated and remains as old value.
     if loan_amount is not None:
         revised_state["loan_amount"] = loan_amount
     if property_value is not None:
@@ -245,11 +235,8 @@ async def revise_loan_underwriting(
     if credit_score is not None:
         revised_state["credit_score"] = credit_score
 
-    # Update the cache with the revised inputs for any further revisions
-    _last_underwriting_state = {
-        k: revised_state[k]
-        for k in ("loan_amount", "property_value", "monthly_income", "monthly_debt", "credit_score")
-    }
+    # Update the per-session cache so further revisions in this call still work
+    context.userdata.loan.last_underwriting_state = revised_state.copy()
 
     result = await underwriting_graph.ainvoke(revised_state)
 

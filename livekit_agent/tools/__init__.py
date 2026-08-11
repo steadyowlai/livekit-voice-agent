@@ -12,6 +12,7 @@ from livekit_agent.tools.loan_task import (
     FinancialProfileTask,
     FinancialProfileResult,
 )
+from livekit_agent.session_state import LoanState, SessionState
 
 __all__ = [
     "calculate_loan_emi",
@@ -20,6 +21,8 @@ __all__ = [
     "adapted_search_fed_policy",
     "evaluate_loan_underwriting",
     "revise_loan_underwriting",
+    "LoanState",
+    "SessionState",
     "LoanRequestTask",
     "LoanRequestResult",
     "FinancialProfileTask",
