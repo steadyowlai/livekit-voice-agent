@@ -81,12 +81,12 @@ Collecting 5 different financial numbers in a single open-ended voice conversati
        │    - Completes                     - Completes 
        │       │                                   │
        │       └─────────────────┬─────────────────┘
-       │                         │ (Data Aggregation & Cache)
+       │                         │ (Data saved to context.userdata.loan.last_underwriting_state)
        │                         │
        └─[Revision Flow] ────────│────────┐
                                  │        ▼
                                  │    revise_loan_underwriting()
-                                 │        │ (Bypasses TaskGroup, patches cache)
+                                 │        │ (Bypasses TaskGroup loan interview, patches context.userdata.loan.last_underwriting_state)
                                  │        │
                                  ▼        ▼
                       LangGraph Underwriting Graph
@@ -174,19 +174,35 @@ When customers ask quick hypothetical questions during a call (e.g. *"What would
 
 ---
 
+### 6. Session State Management: Persistent Context
+**Why it is needed:**
+A voice agent must remember what the caller said earlier in the session to allow for quick corrections without forcing them to restart a lengthy interview process. Relying solely on the LLM's conversational memory isn't reliable enough for deterministic application state.
+
+**How it works:**
+1. We define a structured dataclass (`SessionState`) in `livekit_agent/session_state.py` to hold all per-caller data. This object is automatically instantiated and injected into the agent's context when a new call begins.
+2. Inside any tool function, this state is accessible via the `context` parameter using `RunContext.userdata` (e.g., `context.userdata.loan.last_underwriting_state`).
+3. **The Revision Flow:** After the initial `evaluate_loan_underwriting` task completes, the user's 5 financial inputs are cached into `userdata`. 
+   - If the user later corrects a single value (e.g., *"Wait, my credit score is 750, not 720"*), the LLM calls `revise_loan_underwriting(credit_score=750)`.
+   - Because function arguments default to `None`, any fields the LLM doesn't explicitly send are `None`.
+   - The tool uses the cached `userdata` as a baseline, patching only the values that were actually provided (not `None`). 
+   - This allows the agent to instantly re-run the LangGraph engine with the corrected data while perfectly remembering all the unrevised fields, skipping the multi-stage intake interview entirely.
+
+---
+
 ## Directory Structure
 
 ```
+├── .env.example                  # Template for environment variables
 ├── livekit_agent.py              # CLI entrypoint
 ├── livekit_agent/
-│   ├── main.py                   # Worker setup, pipeline initialization, session MCP config
+│   ├── main.py                   # Worker setup and pipeline initialization
 │   ├── assistant.py              # Assistant agent definition and tool binding
+│   ├── session_state.py          # Per-caller session state dataclass (userdata)
 │   └── tools/
 │       ├── __init__.py           # Unified tool exports
 │       ├── loan_task.py          # TaskGroup intake flow and LangGraph evaluation
 │       ├── emi_calculator.py     # Native loan amortization calculator
-│       ├── adapted_tools.py      # Standard LangChain-to-LiveKit tool adapter
-│       └── underwriting.py       # LangGraph invocation wrapper
+│       └── adapted_tools.py      # Standard LangChain-to-LiveKit tool adapter
 ├── langchain/
 │   └── tools.py                  # LangChain search tools (market rates, Fed policy)
 ├── langgraph/
