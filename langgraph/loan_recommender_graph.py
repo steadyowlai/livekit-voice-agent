@@ -89,16 +89,18 @@ async def recommend_loan(state: RecommenderState, config: RunnableConfig):
     purpose = state.get("loan_purpose")
     down_payment = state.get("down_payment_percent")
     
-    prompt = "You are a loan recommender. Give a recommendation based on the user's data, OR answer their follow-up questions if a recommendation was already given.\n"
     if purpose == "renovate":
-        prompt += "Recommend a HELOC. Explain that a HELOC lets them borrow against their home's existing equity with flexible draw periods, making it ideal for renovation projects where costs come in stages.\n"
+        recommendation = "Recommend a HELOC. Explain that a HELOC lets them borrow against their home's existing equity with flexible draw periods, making it ideal for renovation projects where costs come in stages."
+    elif down_payment is not None and down_payment < 20:
+        recommendation = "Recommend an FHA Loan. Explain that FHA loans allow down payments as low as 3.5% and are backed by the Federal Housing Administration, but they require mortgage insurance premiums."
     else:
-        if down_payment is not None and down_payment < 20:
-            prompt += "Recommend an FHA Loan. Explain that FHA loans allow down payments as low as 3.5% and are backed by the Federal Housing Administration, but they require mortgage insurance premiums.\n"
-        else:
-            prompt += "Recommend a Conventional Mortgage. Explain that with 20%+ down they avoid private mortgage insurance and typically get the best rates.\n"
-    
-    prompt += "Keep responses concise (2-3 sentences max). Do NOT use complex formatting, bullet points, asterisks, or emojis. At the end, ask if they have any other questions."
+        recommendation = "Recommend a Conventional Mortgage. Explain that with 20%+ down they avoid private mortgage insurance and typically get the best rates."
+        
+    prompt = f"""You are a loan recommender. Give a recommendation based on the user's data, OR answer their follow-up questions if a recommendation was already given.
+
+{recommendation}
+
+Keep responses concise (2-3 sentences max). Do NOT use complex formatting, bullet points, asterisks, or emojis. At the end, ask if they have any other questions."""
     
     response = await _model.ainvoke([SystemMessage(content=prompt)] + state.get("messages", []), config)
     return {"messages": [response], "recommendation_given": True}
