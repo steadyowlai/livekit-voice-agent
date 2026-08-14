@@ -1,0 +1,114 @@
+"""
+Loan Recommender Tool & Agent (Official LLMAdapter Pattern)
+============================================================
+Demonstrates the official livekit-plugins-langchain LLMAdapter pattern.
+
+When the user asks for help choosing a loan type, the main Assistant calls
+recommend_home_loan(). This tool swaps the active agent from the main
+OpenAI-powered Assistant to a LoanRecommenderAgent whose LLM is a
+LangGraph wrapped in langchain.LLMAdapter.
+
+The LoanRecommenderAgent overrides llm_node to stream from the graph
+directly, filtering to only yield AIMessageChunk instances. This prevents
+any internal tool results from being spoken, only the final conversational
+response is heard.
+"""
+
+from langchain_core.messages import AIMessageChunk, HumanMessage, AIMessage, SystemMessage
+from livekit.agents import llm, AgentTask
+from livekit.agents.beta.workflows import TaskGroup
+from livekit.plugins import langchain
+from langchain_core.messages import AIMessageChunk
+
+from langgraph.loan_recommender_graph import (
+    graph,
+)
+
+
+class LoanRecommenderTask(AgentTask[None]):
+    """
+    A dedicated agent whose LLM is a LangGraph (via langchain.LLMAdapter).
+
+    Overrides llm_node to stream from the LangGraph directly, filtering
+    out any internal tool messages so only the AI's spoken response is
+    sent to TTS.
+    """
+
+    def __init__(self) -> None:
+        # Import the globally compiled graph
+        self._graph = graph
+        super().__init__(
+            instructions="You are a loan recommender.", # Instructions handled by LangGraph prompt
+            llm=langchain.LLMAdapter(
+                graph=self._graph
+            ),
+        )
+
+    async def on_enter(self) -> None:
+        # Trigger the LangGraph to generate its first response based on the existing history.
+        # It will automatically route to 'ask_purpose' or 'recommend_loan' based on what
+        # the user already told the main assistant.
+        await self.session.generate_reply()
+
+
+    async def llm_node(self, chat_ctx, tools, model_settings=None):
+        """Stream from the LangGraph, yielding only AI message chunks.
+
+        The LLMAdapter streams all message types including ToolMessage
+        content. This override filters the stream to only yield
+        AIMessageChunk instances, preventing tool results from being spoken.
+        """
+        # Use the adapter to convert LiveKit chat context to LangChain state
+        stream = langchain.LLMAdapter(graph=self._graph).chat(
+            chat_ctx=chat_ctx, tools=[]
+        )
+        lc_messages = stream._chat_ctx_to_state()
+
+        # Stream from the graph, filtering for AI responses and checking state updates
+        async for stream_type, payload in self._graph.astream(
+            lc_messages, stream_mode=["messages", "values"]
+        ):
+            # If we receive a state value update, check if we need to exit
+            if stream_type == "values":
+                if payload.get("wants_to_exit"):
+                    self.complete(None)
+                    break
+                continue
+                
+            # Otherwise, process message chunks
+            if stream_type == "messages":
+                chunk, _metadata = payload
+                
+                # Filter out chunks from the silent 'classify_input' node
+                speaking_nodes = {"ask_purpose", "ask_down_payment", "recommend_loan"}
+                if _metadata.get("langgraph_node") not in speaking_nodes:
+                    continue
+                    
+                if isinstance(chunk, AIMessageChunk) and chunk.content:
+                    yield llm.ChatChunk(
+                        id=chunk.id or "",
+                        delta=llm.ChoiceDelta(
+                            role="assistant", content=chunk.content
+                        ),
+                    )
+
+
+@llm.function_tool
+async def recommend_home_loan() -> str:
+    """
+    Start an interactive loan type recommendation session.
+    Call this when the user wants help choosing between loan types
+    (e.g., FHA vs Conventional vs HELOC) or doesn't know which loan to get.
+    """
+    # Use TaskGroup to safely run the sub-agent LangGraph without crashing audio
+    group = (
+        TaskGroup()
+        .add(
+            lambda: LoanRecommenderTask(),
+            id="recommender",
+            description="Run the interactive loan recommendation state machine",
+        )
+    )
+    await group
+    
+    return "The recommendation session has completed. Politely ask the user what else you can help them with today."

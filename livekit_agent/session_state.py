@@ -15,7 +15,7 @@ from typing import Optional
 
 from langgraph.stategraph import UnderwritingState
 
-
+#we could add more state classes here if needed
 @dataclass
 class LoanState:
     """Per-caller underwriting cache so revisions skip the interview."""

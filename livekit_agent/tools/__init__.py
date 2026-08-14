@@ -12,6 +12,10 @@ from livekit_agent.tools.loan_task import (
     FinancialProfileTask,
     FinancialProfileResult,
 )
+from livekit_agent.tools.loan_recommender import (
+    recommend_home_loan,
+    LoanRecommenderTask,
+)
 from livekit_agent.session_state import LoanState, SessionState
 
 __all__ = [
@@ -27,4 +31,6 @@ __all__ = [
     "LoanRequestResult",
     "FinancialProfileTask",
     "FinancialProfileResult",
+    "recommend_home_loan",
+    "LoanRecommenderTask",
 ]
