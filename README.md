@@ -52,17 +52,68 @@ This project demonstrates how to build a production-grade conversational banking
 
 ---
 
-## Core Subsystems Explained
+## Implementation Patterns
 
-### 1. LiveKit TaskGroups: Structured Voice Intake
-Collecting 5 different financial numbers in a single open-ended voice conversation often causes LLMs to miss fields, ask redundant questions, or hallucinate. LiveKit's `TaskGroup` pattern turns the application intake into a clean, sequential state machine.
+### Pattern 1: Using Native Tools
+When a simple, stateless utility function is needed (like math), a native `@llm.function_tool` is the fastest and most direct approach.
+
+**How to trigger it:**
+Ask the agent: *"What would my monthly payment be for a $250,000 loan at 6.5% interest over 30 years?"*
 
 **How it works:**
-1. When the caller asks to apply for a loan, the main agent invokes `evaluate_loan_underwriting`.
-2. Control temporarily transitions to **Stage 1 (`LoanRequestTask`)**, which proactively asks for the loan amount and property value. Once collected, `record_loan_request` completes Stage 1.
-3. The `TaskGroup` immediately advances to **Stage 2 (`FinancialProfileTask`)**, which asks for monthly income, debt payments, and credit score, calling `record_financial_profile`.
-4. When both tasks finish, the aggregated data is handed off to LangGraph, and the final underwriting verdict is returned to the main agent to announce once.
-5. **State Revision:** The final state is cached in memory. If the user later corrects a value (e.g., *"actually, the property is $2M"*), the agent calls `revise_loan_underwriting` to patch the cache and re-run the LangGraph engine instantly, skipping the intake interview entirely.
+1. Implemented in `livekit_agent/tools/emi_calculator.py` as a native `@llm.function_tool`.
+2. Takes `principal`, `interest_rate`, and `tenure_years`, validates inputs, applies the standard amortization formula, and returns monthly payment, total interest, and total cost in milliseconds.
+
+---
+
+### Pattern 2: Using Adapted LangChain Tools
+Enterprises often have established tool repositories written in LangChain. Rather than rewriting these tools specifically for LiveKit, we build a generic adapter to import them directly into the voice agent.
+
+**How to trigger it:**
+Ask the agent: *"What are the current market interest rates?"* or *"What did the Fed say about interest rates recently?"*
+
+**How it works:**
+1. In `langchain/tools.py`, we define standard synchronous LangChain `@tool` functions (`search_market_rates`, `search_fed_policy`).
+2. In `livekit_agent/tools/adapted_tools.py`, we implement `adapt_langchain_tool(lc_tool)`:
+   - `@functools.wraps(lc_tool.func)` copies the function signature, argument types, and docstrings so LiveKit automatically generates the JSON tool schema for the LLM.
+   - `asyncio.to_thread` runs the synchronous web search on a background worker thread so live HTTP calls never freeze the real-time audio pipeline or Speech-to-Text processing.
+3. Existing LangChain tools are adapted in single clean statements:
+   ```python
+   adapted_search_market_rates = adapt_langchain_tool(search_market_rates)
+   adapted_search_fed_policy = adapt_langchain_tool(search_fed_policy)
+   ```
+
+---
+
+### Pattern 3: Using MCP (Model Context Protocol)
+Banking product offerings, interest rate policies, and customer records should live in an independent service rather than being hardcoded into the voice bot. Anthropic's Model Context Protocol (MCP) provides a standardized protocol for exposing these tools.
+
+**How to trigger it:**
+Ask the agent: *"What commercial loan products do you offer?"* or *"Can you read the lending guidelines?"*
+
+**How it works:**
+1. A FastMCP server (`mcp/mcp_server.py`) runs as a standalone service on `http://127.0.0.1:8000/sse` using Server-Sent Events (SSE).
+2. In `livekit_agent/main.py`, the MCP server is registered at the **session level** using `tools=[MCPToolset(id="bank_mcp", mcp_server=MCPServerHTTP(...))]`.
+3. Because the toolset is session-scoped, the connection stays open permanently throughout the call, surviving sub-agent handoffs and task transitions.
+4. The server exposes:
+   - `list_available_loan_products`: Retail & commercial loan catalogs with interest rate ranges and borrowing limits.
+   - `fetch_bank_policy`: Policy limits, minimum credit scores, and down payment requirements.
+   - `get_customer_profile`: Account verification and pre-approval status.
+   - `read_lending_guidelines`: Regulatory compliance and closing document checklists.
+
+---
+
+### Pattern 4: Using LangGraph as a Tool with TaskGroup
+Collecting complex financial data in a single open-ended voice conversation often causes LLMs to miss fields or hallucinate math. We solve this by using LiveKit's `TaskGroup` to enforce a sequential voice intake interview, and then passing that data into a deterministic LangGraph tool to do the heavy underwriting math.
+
+**How to trigger it:**
+Tell the agent: *"I want to apply for a loan."* 
+*(After it gives the result, test the revision flow by saying: "Wait, my credit score is actually 750".)*
+
+**How it works:**
+1. **The Intake Interview (`TaskGroup`):** When the caller asks to apply for a loan, the agent invokes `evaluate_loan_underwriting`. Control temporarily transitions to **Stage 1 (`LoanRequestTask`)**, which proactively asks for the loan amount and property value. The `TaskGroup` then advances to **Stage 2 (`FinancialProfileTask`)**, which asks for monthly income, debt payments, and credit score.
+2. **The Underwriting Engine (`LangGraph`):** When both tasks finish, the aggregated data is handed off to a pure computational `StateGraph` (`langgraph/stategraph.py`). It calculates `DTI` and `LTV`, categorizes credit risk into tiers, evaluates approval rules, and generates a structured verdict. The final verdict is returned to the main agent to announce once.
+3. **Session Caching & Revision:** The final state is cached in memory (`SessionStateCache`). If the user later corrects a single value (e.g., *"Wait, my credit score is 750"*), the LLM calls `revise_loan_underwriting(credit_score=750)`. The tool uses the cached `userdata` as a baseline, patches only the provided value, and re-runs the LangGraph engine instantly—skipping the multi-stage intake interview entirely.
 
 ```text
 [Main Assistant]
@@ -94,96 +145,11 @@ Collecting 5 different financial numbers in a single open-ended voice conversati
 
 ---
 
-### 2. LangGraph for Predictable Underwriting
-Voice AI works best for unstructured chatter, while LangGraph excels at structured, deterministic, multi-step workflows. LangGraph acts as the "backend logic" separated from the "frontend voice" interaction.
-
-**How it works:**
-1. We build and compile a pure computational `StateGraph` in `langgraph/stategraph.py`.
-2. We import this graph into the LiveKit agent tools (`livekit_agent/tools/loan_task.py`) and invoke it via `underwriting_graph.ainvoke(initial_state)` upon intake completion.
-3. The graph executes 3 sequential compute nodes:
-   - **`calculate_ratios_node`**: Computes `DTI = (monthly_debt / monthly_income) * 100` and `LTV = (loan_amount / property_value) * 100`.
-   - **`evaluate_credit_risk_node`**: Categorizes the credit score into risk tiers:
-     - Tier 1 (Prime): Credit Score >= 740, Base Rate = 6.25%
-     - Tier 2 (Standard): Credit Score >= 680, Base Rate = 6.75%
-     - Tier 3 (Near-Prime): Credit Score >= 620, Base Rate = 7.50%
-     - Tier 4 (Subprime): Credit Score < 620, Base Rate = 9.25%
-   - **`underwrite_decision_node`**: Evaluates approval rules (`DTI <= 45%`, `Credit Score >= 620`), adds PMI requirements and rate adjustment (+0.25%) if `LTV > 80%` or `DTI > 38%`, computes exact monthly payments via 30-year fixed amortization formula, and generates a structured verdict.
-
-```python
-# State Schema
-class UnderwritingState(TypedDict):
-    loan_amount: float
-    property_value: float
-    monthly_income: float
-    monthly_debt: float
-    credit_score: int
-    dti_ratio: float
-    ltv_ratio: float
-    credit_tier: str
-    base_interest_rate: float
-    approval_status: str
-    final_interest_rate: float | None
-    estimated_monthly_payment: float | None
-    underwriting_notes: str
-    summary: str
-```
-
----
-
-### 3. LangChain Tool Adapter: Reusable Enterprise Tools
-
-**How it works:**
-1. In `langchain/tools.py`, we define standard synchronous LangChain `@tool` functions (`search_market_rates`, `search_fed_policy`).
-2. In `livekit_agent/tools/adapted_tools.py`, we implement `adapt_langchain_tool(lc_tool)`:
-   - `@functools.wraps(lc_tool.func)` copies the function signature, argument types, and docstrings so LiveKit automatically generates the OpenAI/Gemini JSON tool schema for the LLM.
-   - `asyncio.to_thread` runs the synchronous web search on a background worker thread so live HTTP calls never freeze the real-time audio pipeline or Speech-to-Text processing.
-3. Existing LangChain tools are adapted in single clean statements:
-   ```python
-   adapted_search_market_rates = adapt_langchain_tool(search_market_rates)
-   adapted_search_fed_policy = adapt_langchain_tool(search_fed_policy)
-   ```
-
----
-
-### 4. FastMCP Server: Decoupled Knowledge & Policy Layer
-
-**How it works:**
-1. A FastMCP server (`mcp/mcp_server.py`) runs as a standalone service on `http://127.0.0.1:8000/sse` using Server-Sent Events (SSE).
-2. In `livekit_agent/main.py`, the MCP server is registered at the **session level** using `tools=[MCPToolset(id="bank_mcp", mcp_server=MCPServerHTTP(...))]`.
-3. Because the toolset is session-scoped, the connection stays open permanently throughout the call, surviving sub-agent handoffs and task transitions.
-4. The server exposes:
-   - `list_available_loan_products`: Retail & commercial loan catalogs with interest rate ranges and borrowing limits.
-   - `fetch_bank_policy`: Policy limits, minimum credit scores, and down payment requirements.
-   - `get_customer_profile`: Account verification and pre-approval status.
-   - `read_lending_guidelines`: Regulatory compliance and closing document checklists.
-
----
-
-### 5. Native EMI Calculator Tool: Instant Ad-Hoc Math
-
-**How it works:**
-1. Implemented in `livekit_agent/tools/emi_calculator.py` as a native `@llm.function_tool`.
-2. Takes `principal`, `interest_rate`, and `tenure_years`, validates inputs, applies the standard amortization formula, and returns monthly payment, total interest, and total cost in milliseconds.
-
----
-
-### 6. Session Caching (The In-Memory Store)
-LiveKit agents spin up inside isolated processes. By default, LangGraph is completely stateless. The `SessionStateCache` acts as a highly efficient shared memory bridge between LiveKit's event loop and the graph.
-
-**How it works:**
-1. We define a structured dataclass (`SessionState`) in `livekit_agent/session_state.py` to hold all per-caller data. This object is automatically instantiated and injected into the agent's context when a new call begins.
-2. Inside any tool function, this state is accessible via the `context` parameter using `RunContext.userdata` (e.g., `context.userdata.loan.last_underwriting_state`).
-3. **The Revision Flow:** After the initial `evaluate_loan_underwriting` task completes, the user's 5 financial inputs are cached into `userdata`. 
-   - If the user later corrects a single value (e.g., *"Wait, my credit score is 750, not 720"*), the LLM calls `revise_loan_underwriting(credit_score=750)`.
-   - Because function arguments default to `None`, any fields the LLM doesn't explicitly send are `None`.
-   - The tool uses the cached `userdata` as a baseline, patching only the values that were actually provided (not `None`). 
-   - This allows the agent to instantly re-run the LangGraph engine with the corrected data while perfectly remembering all the unrevised fields, skipping the multi-stage intake interview entirely.
-
----
-
-### 7. LangGraph LLM Adapter: Graph-Driven Conversation
-
+### Pattern 5: Using LangGraph as an LLM with LLMAdapter and TaskGroup
 We use LangGraph to completely drive complex, multi-stage voice conversations (rather than just running it as a background tool). We are doing this to enforce strict decision-tree flows—such as a loan type recommender—that ask branching questions and route the user down different dialogue paths based on their real-time answers.
+
+**How to trigger it:**
+Tell the agent: *"Help me choose a loan type."* The agent will hand off the microphone to the LangGraph recommender until you finish the flow.
 
 **How it works:**
 1. We use the official `langchain.LLMAdapter` from `livekit-plugins-langchain` to wrap our LangGraph as a LiveKit-compatible LLM. The adapter converts LiveKit's persistent `ChatContext` history into standard LangChain message types on every turn.
