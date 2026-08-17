@@ -15,6 +15,8 @@ This project is a demo exploring different ways to integrate LiveKit, LangGraph,
 5. **LangChain (Tool Reusability & Adapters):** Bridges existing enterprise LangChain tools (market interest rate and Fed policy web search) directly into LiveKit using a generic adapter that runs synchronous network I/O in worker threads without stalling real-time audio.
 6. **FastMCP Server (Decoupled Enterprise Knowledge):** Exposes bank product catalogs, customer account data, and compliance guidelines over the Model Context Protocol (SSE transport), maintaining a persistent session connection across all agent tasks.
 
+> **Note:** This is an exploratory demo, so the different features aren't fully wired together. For example, the max loan limits you see in the MCP server aren't actually enforced by the loan recommender or underwriting graphs.
+
 ---
 
 ## System Architecture
