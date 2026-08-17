@@ -27,7 +27,7 @@ This project demonstrates how to build a production-grade conversational banking
                                             ▼
                                 ┌────────────────────────┐
                                 │      LiveKit Agent     │
-                                │  • STT: Deepgram Nova3 │
+                                │  • STT: Deepgram Flux  │
                                 │  • VAD: Silero         │
                                 │  • LLM: OpenAI GPT-4.1 │
                                 │  • TTS: Cartesia       │
