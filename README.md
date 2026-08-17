@@ -10,9 +10,10 @@ This project demonstrates how to build a production-grade conversational banking
 
 1. **LiveKit Agents (Voice Orchestration):** Manages real-time WebRTC audio streaming, Voice Activity Detection (VAD), Speech-to-Text (STT), Text-to-Speech (TTS), and conversational turn-taking with ultra-low latency.
 2. **LiveKit TaskGroups (Multi-Turn Intake State Machine):** Replaces messy single-prompt data collection with structured, sequential intake stages (`LoanRequestTask` → `FinancialProfileTask`) to reliably collect user financials over voice without confusion.
-3. **LangGraph (Deterministic Credit Underwriting):** Eliminates LLM math hallucinations by delegating underwriting calculations, ratio analysis, risk tiering, and approval decisions to a pure, deterministic 3-node computational state graph.
-4. **LangChain (Tool Reusability & Adapters):** Bridges existing enterprise LangChain tools (market interest rate and Fed policy web search) directly into LiveKit using a generic adapter that runs synchronous network I/O in worker threads without stalling real-time audio.
-5. **FastMCP Server (Decoupled Enterprise Knowledge):** Exposes bank product catalogs, customer account data, and compliance guidelines over the Model Context Protocol (SSE transport), maintaining a persistent session connection across all agent tasks.
+3. **LangGraph 1: Background Underwriting Tool:** Eliminates LLM math hallucinations by delegating underwriting calculations, ratio analysis, risk tiering, and approval decisions to a pure, deterministic computational state graph running as a background tool.
+4. **LangGraph 2: LLMAdapter Voice Recommender:** Completely takes over the voice interaction to run a dynamic, multi-turn decision tree (Loan Recommender) using `langchain.LLMAdapter` and dual-mode (`messages` and `values`) stream state monitoring.
+5. **LangChain (Tool Reusability & Adapters):** Bridges existing enterprise LangChain tools (market interest rate and Fed policy web search) directly into LiveKit using a generic adapter that runs synchronous network I/O in worker threads without stalling real-time audio.
+6. **FastMCP Server (Decoupled Enterprise Knowledge):** Exposes bank product catalogs, customer account data, and compliance guidelines over the Model Context Protocol (SSE transport), maintaining a persistent session connection across all agent tasks.
 
 ---
 
@@ -36,16 +37,28 @@ This project demonstrates how to build a production-grade conversational banking
         │                                   │                                   │
         ▼                                   ▼                                   ▼
 ┌───────────────────────┐       ┌───────────────────────┐       ┌───────────────────────┐
-│   TaskGroup & Graph   │       │   LangChain Adapter   │       │   FastMCP Server      │
+│ Graph 1: Underwriter  │       │   LangChain Adapter   │       │   FastMCP Server      │
 ├───────────────────────┤       ├───────────────────────┤       ├───────────────────────┤
-│ • TaskGroup Intake    │       │ • adapt_langchain_tool│       │ • Transport: SSE      │
-│   - LoanRequestTask   │       │ • DuckDuckGo search   │       │ • Port: 8000          │
-│   - FinancialProfile  │       │ • Non-blocking async  │       │ • Endpoints/Tools:    │
-│ • LangGraph StateGraph│       │   via thread pool     │       │   - list_products     │
-│   - calculate_ratios  │       └───────────────────────┘       │   - fetch_policy      │
-│   - eval_credit_risk  │                                       │   - get_profile       │
-│   - underwrite_decide │                                       │   - read_guidelines   │
-│ • Native EMI Tool     │                                       └───────────────────────┘
+│ • Background Tool     │       │ • adapt_langchain_tool│       │ • Transport: SSE      │
+│ • TaskGroup Intake    │       │ • DuckDuckGo search   │       │ • Port: 8000          │
+│ • StateGraph          │       │ • Non-blocking async  │       │ • Endpoints/Tools:    │
+│   - calculate_ratios  │       │   via thread pool     │       │   - list_products     │
+│   - eval_credit_risk  │       └───────────────────────┘       │   - fetch_policy      │
+│   - underwrite_decide │                                       │   - get_profile       │
+└───────────┬───────────┘                                       │   - read_guidelines   │
+            │                                                   └───────────────────────┘
+            ▼
+┌───────────────────────┐
+│ Graph 2: Recommender  │
+├───────────────────────┤
+│ • Voice Sub-Agent     │
+│ • langchain.LLMAdapter│
+│ • Custom llm_node     │
+│ • StateGraph          │
+│   - classify_input    │
+│   - ask_purpose       │
+│   - ask_down_payment  │
+│   - recommend_loan    │
 └───────────────────────┘
 ```
 
