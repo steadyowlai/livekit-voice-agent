@@ -133,13 +133,13 @@ def route_next_step(state: RecommenderState):
 
 workflow = StateGraph(RecommenderState)
 
-# 1. Add nodes
+#nodes
 workflow.add_node("classify_input", classify_input)
 workflow.add_node("ask_purpose", ask_purpose)
 workflow.add_node("ask_down_payment", ask_down_payment)
 workflow.add_node("recommend_loan", recommend_loan)
 
-# 2. Add edges
+#edges
 workflow.add_edge(START, "classify_input")
 workflow.add_conditional_edges("classify_input", route_next_step)
 

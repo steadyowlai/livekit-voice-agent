@@ -54,7 +54,6 @@ This project demonstrates how to build a production-grade conversational banking
 ## Core Subsystems Explained
 
 ### 1. LiveKit TaskGroups: Structured Voice Intake
-**Why it is needed:**
 Collecting 5 different financial numbers in a single open-ended voice conversation often causes LLMs to miss fields, ask redundant questions, or hallucinate. LiveKit's `TaskGroup` pattern turns the application intake into a clean, sequential state machine.
 
 **How it works:**
@@ -94,9 +93,8 @@ Collecting 5 different financial numbers in a single open-ended voice conversati
 
 ---
 
-### 2. LangGraph StateGraph: Deterministic Underwriting Engine
-**Why it is needed:**
-Underwriting requires strict adherence to regulatory rules, Debt-to-Income (DTI) thresholds, Loan-to-Value (LTV) limits, and accurate 30-year fixed loan amortization formulas. Leaving this to an LLM risks mathematical errors and compliance violations.
+### 2. LangGraph for Predictable Underwriting
+Voice AI works best for unstructured chatter, while LangGraph excels at structured, deterministic, multi-step workflows. LangGraph acts as the "backend logic" separated from the "frontend voice" interaction.
 
 **How it works:**
 1. We build and compile a pure computational `StateGraph` in `langgraph/stategraph.py`.
@@ -132,8 +130,6 @@ class UnderwritingState(TypedDict):
 ---
 
 ### 3. LangChain Tool Adapter: Reusable Enterprise Tools
-**Why it is needed:**
-Enterprises often have established tool repositories written in LangChain (such as web scrapers, vector search, or database queries). Rather than rewriting these tools specifically for LiveKit, we build a generic adapter to import them directly into the voice agent.
 
 **How it works:**
 1. In `langchain/tools.py`, we define standard synchronous LangChain `@tool` functions (`search_market_rates`, `search_fed_policy`).
@@ -149,8 +145,6 @@ Enterprises often have established tool repositories written in LangChain (such 
 ---
 
 ### 4. FastMCP Server: Decoupled Knowledge & Policy Layer
-**Why it is needed:**
-Banking product offerings, interest rate policies, and customer records should live in an independent service rather than being hardcoded into the voice bot. Anthropic's Model Context Protocol (MCP) provides a standardized protocol for exposing these tools.
 
 **How it works:**
 1. A FastMCP server (`mcp/mcp_server.py`) runs as a standalone service on `http://127.0.0.1:8000/sse` using Server-Sent Events (SSE).
@@ -165,8 +159,6 @@ Banking product offerings, interest rate policies, and customer records should l
 ---
 
 ### 5. Native EMI Calculator Tool: Instant Ad-Hoc Math
-**Why it is needed:**
-When customers ask quick hypothetical questions during a call (e.g. *"What would my payment be for $250k at 6.5% over 20 years?"*), the agent needs a fast, direct calculation tool that runs locally without invoking external services.
 
 **How it works:**
 1. Implemented in `livekit_agent/tools/emi_calculator.py` as a native `@llm.function_tool`.
@@ -174,9 +166,8 @@ When customers ask quick hypothetical questions during a call (e.g. *"What would
 
 ---
 
-### 6. Session State Management: Persistent Context
-**Why it is needed:**
-A voice agent must remember what the caller said earlier in the session to allow for quick corrections without forcing them to restart a lengthy interview process. Relying solely on the LLM's conversational memory isn't reliable enough for deterministic application state.
+### 6. Session Caching (The In-Memory Store)
+LiveKit agents spin up inside isolated processes. By default, LangGraph is completely stateless. The `SessionStateCache` acts as a highly efficient shared memory bridge between LiveKit's event loop and the graph.
 
 **How it works:**
 1. We define a structured dataclass (`SessionState`) in `livekit_agent/session_state.py` to hold all per-caller data. This object is automatically instantiated and injected into the agent's context when a new call begins.
@@ -186,6 +177,44 @@ A voice agent must remember what the caller said earlier in the session to allow
    - Because function arguments default to `None`, any fields the LLM doesn't explicitly send are `None`.
    - The tool uses the cached `userdata` as a baseline, patching only the values that were actually provided (not `None`). 
    - This allows the agent to instantly re-run the LangGraph engine with the corrected data while perfectly remembering all the unrevised fields, skipping the multi-stage intake interview entirely.
+
+---
+
+### 7. LangGraph LLM Adapter: Graph-Driven Conversation
+
+We use LangGraph to completely drive complex, multi-stage voice conversations (rather than just running it as a background tool). We are doing this to enforce strict decision-tree flows—such as a loan type recommender—that ask branching questions and route the user down different dialogue paths based on their real-time answers.
+
+**How it works:**
+1. We use the official `langchain.LLMAdapter` from `livekit-plugins-langchain` to wrap our LangGraph as a LiveKit-compatible LLM. The adapter converts LiveKit's persistent `ChatContext` history into standard LangChain message types on every turn.
+2. The loan recommender graph is built as a custom `StateGraph` that evaluates the entire conversation history statelessly. A `classify_input` node runs first to extract `loan_purpose` and `down_payment_percent`, allowing the graph to dynamically heal from interruptions.
+3. Our `LoanRecommenderTask` sub-agent overrides `llm_node` to stream directly from the graph using `astream(stream_mode=["messages", "values"])`. It filters for `AIMessageChunk` instances (preventing raw JSON tool calls from being spoken) while simultaneously listening to the `values` stream to detect when the graph reaches a termination state (`wants_to_exit`).
+4. When the user says *"Help me choose a loan type"*, the main OpenAI agent calls `recommend_home_loan()`, which yields control using a `TaskGroup` to safely hand off the microphone to the LangGraph-powered agent until the session is complete.
+
+```text
+[Main Assistant (OpenAI)]
+        │
+        │ User: "What loan should I get?"
+        │ → calls recommend_home_loan()
+        │ → TaskGroup pauses Main Assistant & starts LoanRecommenderTask
+        │
+        ▼
+[LoanRecommenderTask (langchain.LLMAdapter + llm_node override)]
+        │
+        ├── "Is this for a purchase or renovation?"
+        │       │
+        │       ├── "purchase" → "What % down payment?"
+        │       │                    │
+        │       │               ├── < 20% → Recommend FHA Loan
+        │       │               └── >= 20% → Recommend Conventional
+        │       │
+        │       └── "renovation" → Recommend HELOC
+        │
+        │ User: "I have no more questions." → wants_to_exit: True
+        │ → self.complete(None)
+        │
+        ▼
+[Control returns to Main Assistant]
+```
 
 ---
 
@@ -201,18 +230,21 @@ A voice agent must remember what the caller said earlier in the session to allow
 │   └── tools/
 │       ├── __init__.py           # Unified tool exports
 │       ├── loan_task.py          # TaskGroup intake flow and LangGraph evaluation
+│       ├── loan_recommender_task.py  # LangGraph LLM adapter agent handoff
 │       ├── emi_calculator.py     # Native loan amortization calculator
 │       └── adapted_tools.py      # Standard LangChain-to-LiveKit tool adapter
 ├── langchain/
 │   └── tools.py                  # LangChain search tools (market rates, Fed policy)
 ├── langgraph/
-│   └── stategraph.py             # 3-node Underwriting StateGraph
+│   ├── stategraph.py             # 3-node Underwriting StateGraph
+│   └── loan_recommender_graph.py # Conversational loan type recommender graph
 ├── mcp/
 │   ├── mcp_server.py             # FastMCP SSE server
 │   ├── db.json                   # Mock banking database
 │   └── bank_guidelines.txt       # Policy documentation
 └── pyproject.toml                # Project configuration and dependencies
 ```
+
 
 ---
 
@@ -276,3 +308,4 @@ uv run livekit_agent.py dev
 | **Market Rates** | *"What are current 30-year mortgage rates?"* | `adapted_search_market_rates` (LangChain Adapter) | Runs LangChain DuckDuckGo search in background worker thread; returns trimmed rate summary without audio stutter. |
 | **Product Inquiries** | *"What commercial loan options do you offer?"* | `list_available_loan_products` (FastMCP SSE) | Queries FastMCP server over SSE; returns commercial real estate and equipment loan terms. |
 | **Loan Calculations** | *"Calculate monthly payment for $200k at 6% over 30 years."* | `calculate_loan_emi` (Native Tool) | Computes exact amortization formula and returns monthly payment + total interest. |
+| **Loan Type Recommender** | *"What type of loan should I get?"* | `recommend_home_loan` → `session.update_agent(LoanRecommenderAgent)` → LangGraph LLM Adapter | Hands off to a LangGraph-powered agent that asks purpose and down payment, then recommends FHA, Conventional, or HELOC. |

@@ -44,9 +44,10 @@ class LoanRecommenderTask(AgentTask[None]):
             ),
         )
 
+    # on_enter() is inherited lifecyle method
     async def on_enter(self) -> None:
         # Trigger the LangGraph to generate its first response based on the existing history.
-        # It will automatically route to 'ask_purpose' or 'recommend_loan' based on what
+        # It will automatically ro`ute to 'ask_purpose' or 'recommend_loan' based on what
         # the user already told the main assistant.
         await self.session.generate_reply()
 
