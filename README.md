@@ -33,33 +33,21 @@ This project demonstrates how to build a production-grade conversational banking
                                 │  • TTS: Cartesia       │
                                 └───────────┬────────────┘
                                             │
-        ┌───────────────────────────────────┼───────────────────────────────────┐
-        │                                   │                                   │
-        ▼                                   ▼                                   ▼
-┌───────────────────────┐       ┌───────────────────────┐       ┌───────────────────────┐
-│ Graph 1: Underwriter  │       │   LangChain Adapter   │       │   FastMCP Server      │
-├───────────────────────┤       ├───────────────────────┤       ├───────────────────────┤
-│ • Background Tool     │       │ • adapt_langchain_tool│       │ • Transport: SSE      │
-│ • TaskGroup Intake    │       │ • DuckDuckGo search   │       │ • Port: 8000          │
-│ • StateGraph          │       │ • Non-blocking async  │       │ • Endpoints/Tools:    │
-│   - calculate_ratios  │       │   via thread pool     │       │   - list_products     │
-│   - eval_credit_risk  │       └───────────────────────┘       │   - fetch_policy      │
-│   - underwrite_decide │                                       │   - get_profile       │
-└───────────┬───────────┘                                       │   - read_guidelines   │
-            │                                                   └───────────────────────┘
-            ▼
-┌───────────────────────┐
-│ Graph 2: Recommender  │
-├───────────────────────┤
-│ • Voice Sub-Agent     │
-│ • langchain.LLMAdapter│
-│ • Custom llm_node     │
-│ • StateGraph          │
-│   - classify_input    │
-│   - ask_purpose       │
-│   - ask_down_payment  │
-│   - recommend_loan    │
-└───────────────────────┘
+        ┌─────────────────────────┬─────────────────────────┬─────────────────────────┐
+        │                         │                         │                         │
+        ▼                         ▼                         ▼                         ▼
+┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────┐
+│  Underwriting Graph   │ │   Recommender Graph   │ │   LangChain Adapter   │ │    FastMCP Server     │
+├───────────────────────┤ ├───────────────────────┤ ├───────────────────────┤ ├───────────────────────┤
+│ • Background Tool     │ │ • Voice Sub-Agent     │ │ • adapt_langchain_tool│ │ • Transport: SSE      │
+│ • TaskGroup Intake    │ │ • langchain.LLMAdapter│ │ • DuckDuckGo search   │ │ • Port: 8000          │
+│ • StateGraph          │ │ • Custom llm_node     │ │ • Non-blocking async  │ │ • Endpoints/Tools:    │
+│   - calculate_ratios  │ │ • StateGraph          │ │   via thread pool     │ │   - list_products     │
+│   - eval_credit_risk  │ │   - classify_input    │ └───────────────────────┘ │   - fetch_policy      │
+│   - underwrite_decide │ │   - ask_purpose       │                           │   - get_profile       │
+└───────────────────────┘ │   - ask_down_payment  │                           │   - read_guidelines   │
+                          │   - recommend_loan    │                           └───────────────────────┘
+                          └───────────────────────┘
 ```
 
 ---
