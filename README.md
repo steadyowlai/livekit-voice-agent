@@ -6,7 +6,7 @@ A real-time voice AI assistant pipeline integrating **LiveKit Agents**, **LangGr
 
 ## Summary
 
-This project is a demo of building a conversational banking agent by composing four specialized AI frameworks together:
+This project is a demo exploring different ways to integrate LiveKit, LangGraph, LangChain and FastMCP together in a single voice agent:
 
 1. **LiveKit Agents (Voice Orchestration):** Manages real-time WebRTC audio streaming, Voice Activity Detection (VAD), Speech-to-Text (STT), Text-to-Speech (TTS), and conversational turn-taking with ultra-low latency.
 2. **LiveKit TaskGroups (Multi-Turn Intake State Machine):** Replaces messy single-prompt data collection with structured, sequential intake stages (`LoanRequestTask` → `FinancialProfileTask`) to reliably collect user financials over voice without confusion.
